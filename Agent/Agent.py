@@ -3,6 +3,7 @@ import os
 import numba as nb
 import numpy as np
 import math
+from sklearn.metrics import accuracy_score
 
 import keras.backend as K
 from keras.optimizers import Adam
@@ -17,10 +18,6 @@ from Environnement.Environnement import Environnement
 from PriorityExperienceReplay.PriorityExperienceReplay import Experience
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
-@nb.jit
-def exponential_rolling_average(old, new, beta=.95):
-    return old * beta + new * (1-beta)
 
 
 class Agent:
@@ -38,7 +35,7 @@ class Agent:
         self.gammas = np.array([gamma ** (i + 1) for i in range(self.n_steps + 1)]).astype(np.float32)
 
         self.atoms = atoms
-        self.v_max = 4
+        self.v_max = 2
         self.v_min = 0
         self.delta_z = (self.v_max - self.v_min) / float(self.atoms - 1)
         self.z_steps = np.array([self.v_min + i * self.delta_z for i in range(self.atoms)]).astype(np.float32)
@@ -70,16 +67,16 @@ class Agent:
 
         state_input = Input(shape=(self.cutoff, 3))
 
-        main_network = Conv1D(256, 3, padding='same')(state_input)
-        main_network = PReLU()(main_network)
+        # main_network = Conv1D(256, 3, padding='same')(state_input)
+        # main_network = PReLU()(main_network)
 
-        main_network = CuDNNGRU(1000)(main_network)
+        main_network = CuDNNGRU(250)(state_input)
         main_network = PReLU()(main_network)
 
         discriminator_output = Dense(1, activation='sigmoid')(main_network)
 
         discriminator = Model(inputs=state_input, outputs=discriminator_output)
-        discriminator.compile(optimizer=Adam(), loss='binary_crossentropy')
+        discriminator.compile(optimizer=Adam(lr=self.lr), loss='binary_crossentropy')
 
         discriminator.summary()
         return discriminator
@@ -90,33 +87,38 @@ class Agent:
         e, total_frames = 0, 0
         while e <= epoch:
 
-            discrim_loss, self.memory = 1, Experience(memory_size=100000, batch_size=self.batch_size, alpha=0.5)
+            discrim_loss, self.memory = 0, Experience(memory_size=100000, batch_size=self.batch_size, alpha=0.5)
             while discrim_loss >= self.discriminator_loss_limit:
-                discrim_loss = exponential_rolling_average(discrim_loss, self.train_discriminator())
+                discrim_loss = self.train_discriminator()
 
             while self.memory.tree.size < self.min_history:
                 self.add_data_to_memory()
+                # self.add_data_to_memory_distributed()
 
             while True:
+                self.add_data_to_memory()
+                # self.add_data_to_memory_distributed()
                 for i in range(4):
                     self.train_on_replay_distributed()
                     total_frames += 1
-                    if discrim_loss >= self.discriminator_loss_limit:
-                        discrim_loss = exponential_rolling_average(discrim_loss, self.train_discriminator())
-                    else:
-                        discrim_loss = exponential_rolling_average(discrim_loss, self.train_discriminator(evaluate=True))
 
-                    if total_frames % 2000 == 0:
-                        print('Epoch :', e,
-                              '\tDataset Epoch :', self.dataset_epoch,
-                              '\tDiscriminator training batch ratio :', self.discriminator_training_batch/self.discriminator_total_batch * 100.0)
-                        self.environnement.make_midi(self.make_big_seed(), str(e) + '.mid')
-                        self.actor.model.save('actor')
-                        self.critic.model.save('critic')
-                        self.discriminator.save('discriminator')
-                        e += 1
+                if discrim_loss >= self.discriminator_loss_limit:
+                    discrim_loss = self.train_discriminator()
+                else:
+                    discrim_loss = self.train_discriminator(evaluate=True)
 
-                self.add_data_to_memory()
+                if total_frames % 10000 == 0:
+                    print('Epoch :', e,
+                          '\tDataset Epoch :', self.dataset_epoch,
+                          '\tDiscriminator training batch ratio :', self.discriminator_training_batch/self.discriminator_total_batch)
+                    self.discriminator_total_batch, self.discriminator_training_batch = 0, 0
+                    eval_seed, eval_loss = self.make_big_seed(30)
+                    print('Eval loss :', eval_loss, end='\t')
+                    self.environnement.make_midi(eval_seed, str(e) + '.mid')
+                    self.actor.model.save('actor')
+                    self.critic.model.save('critic')
+                    self.discriminator.save('discriminator')
+                    e += 1
 
     @nb.jit
     def train_discriminator(self, evaluate=False):
@@ -142,24 +144,47 @@ class Agent:
             states[i+1, -1] = action
         return states[:-1]
 
+    def make_training_data_distributed(self):
+        seed = self.get_seed()
+        states = np.zeros((self.batch_size + self.n_steps + 1, self.cutoff, 3))
+        actions = np.zeros((self.batch_size + self.n_steps + 1, 3))
+        rewards = np.zeros((self.batch_size + self.n_steps + 1, 1))
+        states[0] = seed
+        for i in range(self.batch_size + self.n_steps):
+            actions[i] = np.clip(self.actor.target_model.predict(states[i:i+1]) + np.random.normal(scale=0.5), -1, 1)
+            states[i+1, :-1] = states[i, 1:]
+            states[i+1, -1] = actions[i]
+            rewards[i] = self.discriminator.evaluate(states[i+1:i+2], np.zeros((1,1)), verbose=0)
+        critic_predictions = self.critic.target_model.predict([states[self.n_steps + 1:], actions])
+        rewards = self.calc_rewards_distributed(rewards, critic_predictions)
+
+        return states[:self.batch_size], actions[:self.batch_size], rewards[:self.batch_size]
+
     def make_training_data(self):
         seed = self.get_seed()
         states = np.zeros((self.batch_size + self.n_steps + 1, self.cutoff, 3))
         actions = np.zeros((self.batch_size + self.n_steps + 1, 3))
+        rewards = np.zeros((self.batch_size + self.n_steps + 1, 1))
         states[0] = seed
         for i in range(self.batch_size + self.n_steps):
-            actions[i] = np.clip(self.actor.target_model.predict(states[i:i+1]) + np.random.normal(), -1, 1)
+            actions[i] = np.clip(self.actor.target_model.predict(states[i:i+1]) + np.random.normal(scale=0.5), -1, 1)
             states[i+1, :-1] = states[i, 1:]
             states[i+1, -1] = actions[i]
-        rewards = self.discriminator.predict(states)
+            rewards[i] = self.discriminator.evaluate(states[i+1:i+2], np.zeros((1,1)), verbose=0)
         critic_predictions = self.critic.target_model.predict([states[self.n_steps + 1:], actions])
-        rewards = self.calc_rewards_distributed(rewards, critic_predictions)
+        rewards = self.calc_rewards(rewards, critic_predictions)
+
         return states[:self.batch_size], actions[:self.batch_size], rewards[:self.batch_size]
 
     def add_data_to_memory(self):
         states, actions, rewards = self.make_training_data()
         for i in range(self.batch_size):
-            self.memory.add((states[i], actions[i], rewards[i]), 1)
+            self.memory.add((states[i], actions[i], rewards[i]), 10)
+
+    def add_data_to_memory_distributed(self):
+        states, actions, rewards = self.make_training_data_distributed()
+        for i in range(self.batch_size):
+            self.memory.add((states[i], actions[i], rewards[i]), 10)
 
     @nb.jit
     def calc_rewards_distributed(self, rewards, predictions):
@@ -170,9 +195,17 @@ class Agent:
         self.update_m_prob(rewards, m_prob, predictions)
         return m_prob[:self.batch_size]
 
+    @nb.jit
+    def calc_rewards(self, rewards, predictions):
+        for i in range(self.batch_size):
+            for j in range(self.n_steps):
+                rewards[i] += (rewards[i + j + 1] * self.gammas[j])
+        rewards[:self.batch_size] += predictions * self.gammas[-1]
+        return rewards[:self.batch_size]
+
     def get_seed(self, seed=False):
         if seed is False:
-            seed = np.random.normal(0, 1, (1, self.cutoff, 3))
+            seed = np.clip(np.random.normal(0, 1, (1, self.cutoff, 3)), -1, 1)
         for _ in range(self.cutoff):
             prediction = self.actor.target_model.predict(seed)
             seed[:, :-1] = seed[:, 1:]
@@ -183,8 +216,9 @@ class Agent:
         seed_list = [self.get_seed()]
         for _ in range(times):
             seed_list.append(self.get_seed(seed_list[-1]))
+        loss = np.mean([self.discriminator.evaluate(seed_list[i], np.zeros((1,1)), verbose=0) for i in range(times)])
         seed = np.concatenate(seed_list, axis=1)
-        return seed
+        return seed, np.mean(loss)
 
     def make_dataset(self):
         data, weights, indices = self.memory.select(0.6)
@@ -207,8 +241,7 @@ class Agent:
         self.actor.train(states, grads)
         self.actor.target_train()
         self.critic.target_train()
-
-        self.memory.priority_update(indices, [loss + weights[i] for i in range(len(indices))])
+        self.memory.priority_update(indices, [loss for _ in range(len(indices))])
 
     @nb.jit
     def update_m_prob(self, reward, m_prob, z):
@@ -228,5 +261,5 @@ class Agent:
 
 
 if __name__ == '__main__':
-    agent = Agent(cutoff=15, discriminator_loss_limits=0.2, batch_size=64)
+    agent = Agent(cutoff=15, discriminator_loss_limits=0.5, batch_size=64)
     agent.train(epoch=5000)

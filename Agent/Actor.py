@@ -38,10 +38,10 @@ class ActorNetwork(object):
     def create_actor_network(self):
         state_input = Input(shape=(self.cutoff, 3))
 
-        main_network = Conv1D(256, 3, padding='same')(state_input)
-        main_network = PReLU()(main_network)
+        # main_network = Conv1D(256, 3, padding='same')(state_input)
+        # main_network = PReLU()(main_network)
 
-        main_network = CuDNNGRU(1000)(main_network)
+        main_network = CuDNNGRU(500)(state_input)
         main_network = PReLU()(main_network)
 
         outputs = Dense(3, activation='tanh')(main_network)

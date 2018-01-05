@@ -37,20 +37,22 @@ class CriticNetwork(object):
     def create_critic_network(self):
         state_input = Input(shape=(self.cutoff, self.action_size))
         action_input = Input(shape=(self.action_size,))
+        #
+        # main_network = Conv1D(256, 3, padding='same')(state_input)
+        # main_network = PReLU()(main_network)
 
-        main_network = Conv1D(256, 3, padding='same')(state_input)
-        main_network = PReLU()(main_network)
-
-        main_network = CuDNNGRU(1000)(main_network)
+        main_network = CuDNNGRU(500)(state_input)
         main_network = PReLU()(main_network)
 
         concat_network = Concatenate()([main_network, action_input])
-        concat_network = Dense(512)(concat_network)
+        concat_network = Dense(256)(concat_network)
         concat_network = PReLU()(concat_network)
 
-        value_prediction = Dense(51, activation='softmax')(concat_network)
+        # value_prediction = Dense(51, activation='softmax')(concat_network)
+        value_prediction = Dense(1)(concat_network)
         critic = Model(inputs=[state_input, action_input], outputs=value_prediction)
-        critic.compile(optimizer=Adam(lr=self.lr), loss='categorical_crossentropy')
+        # critic.compile(optimizer=Adam(lr=self.lr), loss='categorical_crossentropy')
+        critic.compile(optimizer=Adam(lr=self.lr), loss='mse')
         critic.summary()
 
         return critic, action_input, state_input
