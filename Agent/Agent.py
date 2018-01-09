@@ -7,10 +7,11 @@ from sklearn.metrics import accuracy_score
 
 import keras.backend as K
 from keras.optimizers import Adam
-from keras.layers import Input, Dense, PReLU, CuDNNGRU, Conv1D
+from keras.layers import Input, Dense
 from keras.models import Model
 from Actor import ActorNetwork
 from Critic import CriticNetwork
+from Stacked_RNN import stacked_rnn
 
 import tensorflow as tf
 
@@ -21,7 +22,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 class Agent:
-    def __init__(self, cutoff=15, from_save=False, gamma=.99, batch_size=64, min_history=64000, lr=5*10e-5,
+    def __init__(self, cutoff=15, from_save=False, gamma=.99, batch_size=64, min_history=64000, lr=10e-4,
                  atoms=51, discriminator_loss_limits=0.2, n_steps=5, tau=0.001):
 
         self.cutoff = cutoff
@@ -59,19 +60,21 @@ class Agent:
         self.discriminator = self._build_discriminator()
         self.discriminator_training_batch, self.discriminator_total_batch = 0, 0
 
-        self.memory = Experience(memory_size=100000, batch_size=self.batch_size, alpha=0.5)
+        self.memory = Experience(memory_size=1000000, batch_size=self.batch_size, alpha=0.5)
 
         self.dataset_epoch = 0
+        # self.actor.model.load_weights('actor')
+        # self.actor.target_model.load_weights('actor')
+        # self.critic.model.load_weights('critic')
+        # self.critic.target_model.load_weights('critic')
+        # self.discriminator.load_weights('discriminator')
+
 
     def _build_discriminator(self):
 
         state_input = Input(shape=(self.cutoff, 3))
 
-        # main_network = Conv1D(256, 3, padding='same')(state_input)
-        # main_network = PReLU()(main_network)
-
-        main_network = CuDNNGRU(250)(state_input)
-        main_network = PReLU()(main_network)
+        main_network = stacked_rnn(state_input, 125)
 
         discriminator_output = Dense(1, activation='sigmoid')(main_network)
 
@@ -87,37 +90,41 @@ class Agent:
         e, total_frames = 0, 0
         while e <= epoch:
 
-            discrim_loss, self.memory = 0, Experience(memory_size=100000, batch_size=self.batch_size, alpha=0.5)
+            discrim_loss = 0
             while discrim_loss >= self.discriminator_loss_limit:
                 discrim_loss = self.train_discriminator()
 
             while self.memory.tree.size < self.min_history:
-                self.add_data_to_memory()
-                # self.add_data_to_memory_distributed()
+                self.add_data_to_memory_no_nstep()
 
             while True:
-                self.add_data_to_memory()
-                # self.add_data_to_memory_distributed()
-                for i in range(4):
-                    self.train_on_replay_distributed()
-                    total_frames += 1
 
-                if discrim_loss >= self.discriminator_loss_limit:
-                    discrim_loss = self.train_discriminator()
-                else:
-                    discrim_loss = self.train_discriminator(evaluate=True)
+                if total_frames % 4 == 0:
 
-                if total_frames % 10000 == 0:
+                    self.add_data_to_memory_no_nstep()
+
+                    if discrim_loss >= self.discriminator_loss_limit:
+                        discrim_loss = self.train_discriminator()
+                    else:
+                        discrim_loss = self.train_discriminator(evaluate=True)
+                self.train_on_replay_no_nstep()
+
+                total_frames += 1
+
+                if total_frames % 2000 == 0:
                     print('Epoch :', e,
                           '\tDataset Epoch :', self.dataset_epoch,
-                          '\tDiscriminator training batch ratio :', self.discriminator_training_batch/self.discriminator_total_batch)
+                          '\tDiscriminator training batch ratio :',
+                          # '\t Average random weight', '%.4f' % self.actor.get_average_random_weight(),
+                          '%.2f' % (self.discriminator_training_batch/self.discriminator_total_batch * 100.0), '%',
+                          )
                     self.discriminator_total_batch, self.discriminator_training_batch = 0, 0
-                    eval_seed, eval_loss = self.make_big_seed(30)
-                    print('Eval loss :', eval_loss, end='\t')
+                    eval_seed, eval_loss = self.make_big_seed(5)
+                    print('Eval loss :', '%.4f' % eval_loss, end='\t')
                     self.environnement.make_midi(eval_seed, str(e) + '.mid')
-                    self.actor.model.save('actor')
-                    self.critic.model.save('critic')
-                    self.discriminator.save('discriminator')
+                    self.actor.model.save('saved_models/actor_' + str(e))
+                    self.critic.model.save('saved_models/critic_' + str(e))
+                    self.discriminator.save('saved_models/discriminator_' + str(e))
                     e += 1
 
     @nb.jit
@@ -151,11 +158,12 @@ class Agent:
         rewards = np.zeros((self.batch_size + self.n_steps + 1, 1))
         states[0] = seed
         for i in range(self.batch_size + self.n_steps):
-            actions[i] = np.clip(self.actor.target_model.predict(states[i:i+1]) + np.random.normal(scale=0.5), -1, 1)
+            actions[i] = np.clip(self.actor.model.predict(states[i:i+1]) + np.random.normal(scale=1), -1, 1)
             states[i+1, :-1] = states[i, 1:]
             states[i+1, -1] = actions[i]
             rewards[i] = self.discriminator.evaluate(states[i+1:i+2], np.zeros((1,1)), verbose=0)
-        critic_predictions = self.critic.target_model.predict([states[self.n_steps + 1:], actions])
+        critic_predictions = self.critic.target_model.predict([states[self.n_steps + 1:],
+                                                               self.actor.target_model.predict(states[self.n_steps + 1:])])
         rewards = self.calc_rewards_distributed(rewards, critic_predictions)
 
         return states[:self.batch_size], actions[:self.batch_size], rewards[:self.batch_size]
@@ -167,19 +175,37 @@ class Agent:
         rewards = np.zeros((self.batch_size + self.n_steps + 1, 1))
         states[0] = seed
         for i in range(self.batch_size + self.n_steps):
-            actions[i] = np.clip(self.actor.target_model.predict(states[i:i+1]) + np.random.normal(scale=0.5), -1, 1)
+            actions[i] = np.clip(self.actor.model.predict(states[i:i+1]) + np.random.normal(), -1, 1)
             states[i+1, :-1] = states[i, 1:]
             states[i+1, -1] = actions[i]
             rewards[i] = self.discriminator.evaluate(states[i+1:i+2], np.zeros((1,1)), verbose=0)
-        critic_predictions = self.critic.target_model.predict([states[self.n_steps + 1:], actions])
+        critic_predictions = self.critic.target_model.predict([states[self.n_steps + 1:],
+                                                               self.actor.target_model.predict(states[self.n_steps + 1:])])
         rewards = self.calc_rewards(rewards, critic_predictions)
 
         return states[:self.batch_size], actions[:self.batch_size], rewards[:self.batch_size]
+
+    def make_training_data_no_nstep(self):
+        seed = self.get_seed()
+        states = np.zeros((self.batch_size + 1, self.cutoff, 3))
+        actions = np.zeros((self.batch_size + 1, 3))
+        states[0] = seed
+        for i in range(self.batch_size):
+            actions[i] = np.clip(self.actor.model.predict(states[i:i + 1]) + np.random.normal(loc=0, scale=1, size=(3,)), -1, 1)
+            states[i+1, :-1] = states[i, 1:]
+            states[i+1, -1] = actions[i]
+
+        return states[:self.batch_size], actions[:self.batch_size], states[1:self.batch_size + 1]
 
     def add_data_to_memory(self):
         states, actions, rewards = self.make_training_data()
         for i in range(self.batch_size):
             self.memory.add((states[i], actions[i], rewards[i]), 10)
+
+    def add_data_to_memory_no_nstep(self):
+        states, actions, states_prime = self.make_training_data_no_nstep()
+        for i in range(self.batch_size):
+            self.memory.add((states[i], actions[i], states_prime[i]), 10)
 
     def add_data_to_memory_distributed(self):
         states, actions, rewards = self.make_training_data_distributed()
@@ -202,6 +228,16 @@ class Agent:
                 rewards[i] += (rewards[i + j + 1] * self.gammas[j])
         rewards[:self.batch_size] += predictions * self.gammas[-1]
         return rewards[:self.batch_size]
+
+    @nb.jit
+    def calc_rewards_no_nstep(self, states, states_primes):
+        rewards = np.zeros((self.batch_size, 1))
+        for i in range(self.batch_size):
+            rewards[i] = self.discriminator.evaluate(states[i:i + 1], np.zeros((1, 1)), verbose=0)
+            rewards[i,0] += self.critic.target_model.predict([states_primes[i:i+1],
+                                    self.actor.target_model.predict(states_primes[i:i+1])]) * self.gammas[0]
+
+        return rewards
 
     def get_seed(self, seed=False):
         if seed is False:
@@ -232,12 +268,37 @@ class Agent:
         actions = np.array(actions)
         return states, actions, reward, indices, weights
 
+    def make_dataset_no_nstep(self):
+        data, weights, indices = self.memory.select(0.6)
+        states, actions, states_prime = [], [], []
+        for i in range(self.batch_size):
+            states.append(data[i][0])
+            actions.append(data[i][1])
+            states_prime.append(data[i][2])
+        states = np.array(states)
+        actions = np.array(actions)
+        states_prime = np.array(states_prime)
+        return states, actions, states_prime, indices
+
     def train_on_replay_distributed(self):
         states, actions, rewards, indices, weights = self.make_dataset()
         loss = self.critic.model.train_on_batch([states, actions], rewards)
 
-        a_for_grad = self.actor.target_model.predict(states)
+        a_for_grad = self.actor.model.predict(states)
         grads = self.critic.gradients(states, a_for_grad)
+        self.actor.train(states, grads)
+        self.actor.target_train()
+        self.critic.target_train()
+        self.memory.priority_update(indices, [loss for _ in range(len(indices))])
+
+    def train_on_replay_no_nstep(self):
+        states, actions, states_prime, indices = self.make_dataset_no_nstep()
+        rewards = self.calc_rewards_no_nstep(states, states_prime)
+        loss = self.critic.model.train_on_batch([states, actions], rewards)
+
+        a_for_grad = self.actor.model.predict(states)
+        grads = self.critic.gradients(states, a_for_grad)
+
         self.actor.train(states, grads)
         self.actor.target_train()
         self.critic.target_train()
@@ -261,5 +322,5 @@ class Agent:
 
 
 if __name__ == '__main__':
-    agent = Agent(cutoff=15, discriminator_loss_limits=0.5, batch_size=64)
+    agent = Agent(cutoff=30, discriminator_loss_limits=0.25, batch_size=64)
     agent.train(epoch=5000)

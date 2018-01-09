@@ -1,8 +1,9 @@
-from keras.layers import Input, Dense, PReLU, CuDNNGRU, Concatenate, Conv1D
+from keras.layers import Input, Dense, LeakyReLU, CuDNNGRU, Concatenate, Conv1D, MaxPooling1D, Flatten
 from keras.models import Model
 from keras.optimizers import Adam
 import keras.backend as K
 import tensorflow as tf
+from Stacked_RNN import stacked_rnn
 
 class CriticNetwork(object):
     def __init__(self, sess, cutoff, action_size, batch_size, tau, lr):
@@ -37,16 +38,14 @@ class CriticNetwork(object):
     def create_critic_network(self):
         state_input = Input(shape=(self.cutoff, self.action_size))
         action_input = Input(shape=(self.action_size,))
-        #
-        # main_network = Conv1D(256, 3, padding='same')(state_input)
-        # main_network = PReLU()(main_network)
 
-        main_network = CuDNNGRU(500)(state_input)
-        main_network = PReLU()(main_network)
+        main_network = stacked_rnn(state_input, 250)
 
         concat_network = Concatenate()([main_network, action_input])
         concat_network = Dense(256)(concat_network)
-        concat_network = PReLU()(concat_network)
+        concat_network = LeakyReLU()(concat_network)
+        concat_network = Dense(256)(concat_network)
+        concat_network = LeakyReLU()(concat_network)
 
         # value_prediction = Dense(51, activation='softmax')(concat_network)
         value_prediction = Dense(1)(concat_network)

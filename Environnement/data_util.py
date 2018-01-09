@@ -25,18 +25,17 @@ def convert_midi_to_nptensor(directory='../Data/', cutoff=10, max_lines=10000000
                 if track.name == 'Piano right':
                     added_lines = 0
                     while added_lines + cutoff < len(track):
-                        try:
-                            sample_to_add = []
-                            for i in range(cutoff):
+                        sample_to_add, i = [], 0
+                        while len(sample_to_add) < cutoff and i + added_lines < len(track):
+                            if track[i + added_lines].type == 'note_on':
                                 tick = [track[i + added_lines].note,
                                         track[i + added_lines].velocity,
                                         track[i + added_lines].time]
                                 sample_to_add.append(tick)
+                            i += 1
+                        if len(sample_to_add) == cutoff:
                             x[current_line] = np.array(sample_to_add)
                             current_line += 1
-                        #Skip meta messages
-                        except AttributeError:
-                            pass
                         added_lines += jump
         x = x[:current_line]
         np.save('../TransformedData/' + name + '_' + str(cutoff) + '.npy', x)
@@ -51,5 +50,16 @@ def make_midi_file(midi, file_name):
         track.append(mido.Message('note_on', note=midi[0, i, 0], velocity=midi[0, i, 1], time=midi[0, i, 2]))
     mid.save('../' + file_name)
 
+
+def print_midi_file(directory='../', name='43.mid'):
+
+    file_name = directory + name
+    mid = mido.MidiFile(file_name)
+
+    for track in mid.tracks:
+        for i in range(len(track)):
+            print(track[i])
+
+
 if __name__ == '__main__':
-    convert_midi_to_nptensor()
+    print_midi_file(name='59.mid')

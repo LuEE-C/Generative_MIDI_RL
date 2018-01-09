@@ -1,7 +1,10 @@
-from keras.layers import Input, Dense, PReLU, CuDNNGRU, Conv1D
+from keras.layers import Input, Dense, LeakyReLU, CuDNNGRU, Conv1D, Flatten, MaxPooling1D
 from keras.models import Model
+import numpy as np
 import tensorflow as tf
 import keras.backend as K
+from NoisyDense import NoisyDense
+from Stacked_RNN import stacked_rnn
 
 
 class ActorNetwork(object):
@@ -35,16 +38,16 @@ class ActorNetwork(object):
             actor_target_weights[i] = self.tau * actor_weights[i] + (1 - self.tau)* actor_target_weights[i]
         self.target_model.set_weights(actor_target_weights)
 
+    def get_average_random_weight(self):
+        return np.mean(self.model.get_layer('out_actions').get_weights()[1])
+
     def create_actor_network(self):
         state_input = Input(shape=(self.cutoff, 3))
 
-        # main_network = Conv1D(256, 3, padding='same')(state_input)
-        # main_network = PReLU()(main_network)
-
-        main_network = CuDNNGRU(500)(state_input)
-        main_network = PReLU()(main_network)
+        main_network = stacked_rnn(state_input, 250)
 
         outputs = Dense(3, activation='tanh')(main_network)
+        # outputs = NoisyDense(3, activation='tanh', sigma_init=1, name='out_actions')(main_network)
 
         actor = Model(inputs=[state_input], outputs=outputs)
         actor.summary()

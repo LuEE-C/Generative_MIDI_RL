@@ -59,7 +59,6 @@ class NoisyDense(Layer):
         else:
             self.bias = None
             self.epsilon_bias = None
-        # self.sample_noise()
         super(NoisyDense, self).build(input_shape)
 
 
@@ -90,10 +89,6 @@ class NoisyDense(Layer):
         config = {
             'units': self.units,
             'sigma_init': self.sigma_init,
-            'sigma_kernel': self.sigma_kernel,
-            'sigma_bias': self.sigma_bias,
-            # 'epsilon_bias': self.epsilon_bias,
-            # 'epsilon_kernel': self.epsilon_kernel,
             'activation': activations.serialize(self.activation),
             'use_bias': self.use_bias,
             'kernel_initializer': initializers.serialize(self.kernel_initializer),
