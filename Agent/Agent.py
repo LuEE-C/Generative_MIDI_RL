@@ -74,10 +74,10 @@ class Agent:
 
                     self.add_data_to_memory()
 
-                    if discrim_loss >= self.discriminator_loss_limit:
-                        discrim_loss = self.train_discriminator()
-                    else:
-                        discrim_loss = self.train_discriminator(evaluate=True)
+                    # if discrim_loss >= self.discriminator_loss_limit:
+                    discrim_loss = self.train_discriminator()
+                    # else:
+                    #     discrim_loss = self.train_discriminator(evaluate=True)
                     self.discriminator.target_train()
                 self.train_on_replay()
 
@@ -110,6 +110,11 @@ class Agent:
             return self.discriminator.model.evaluate([batch], [self.labels], verbose=0)
         self.discriminator_total_batch += 1
         self.discriminator_training_batch += 1
+        for l in self.discriminator.model.layers:
+            weights = l.get_weights()
+            weights = [np.clip(w, -0.05, 0.05) for w in weights]
+            l.set_weights(weights)
+
         return self.discriminator.model.train_on_batch([batch], [self.labels])
 
     def get_fake_batch(self):
