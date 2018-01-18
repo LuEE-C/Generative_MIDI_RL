@@ -2,6 +2,7 @@ import os
 
 import numba as nb
 import numpy as np
+from math import log
 
 import keras.backend as K
 from Models.Actor import ActorNetwork
@@ -27,7 +28,8 @@ class Agent:
 
         self.n_steps = n_steps
 
-        self.labels = np.array([1] * self.batch_size + [0] * self.batch_size)
+        # self.labels = np.array([1] * self.batch_size + [0] * self.batch_size)
+        self.labels = np.array([-1] * self.batch_size + [1] * self.batch_size)
         self.gamma = gamma
 
         self.tau = tau
@@ -144,7 +146,13 @@ class Agent:
     def calc_rewards(self, states, states_primes):
         rewards = np.zeros((self.batch_size, 1))
         for i in range(self.batch_size):
-            rewards[i] = self.discriminator.target_model.evaluate(states[i:i + 1], np.zeros((1, 1)), verbose=0)
+            val = self.discriminator.target_model.evaluate(states[i:i + 1], -np.ones((1, 1)), verbose=0)
+            if val < 0:
+                val = min(-log(abs(val)), 0)
+            else:
+                val = max(log(val), 0)
+
+            rewards[i] = val
             rewards[i,0] += self.critic.target_model.predict([states_primes[i:i+1],
                                     self.actor.target_model.predict(states_primes[i:i+1])]) * self.gamma
 
@@ -163,7 +171,7 @@ class Agent:
         seed_list = [self.get_seed()]
         for _ in range(times):
             seed_list.append(self.get_seed(seed_list[-1]))
-        loss = np.mean([self.discriminator.target_model.evaluate(seed_list[i], np.zeros((1,1)), verbose=0) for i in range(times)])
+        loss = np.mean([self.discriminator.target_model.evaluate(seed_list[i], -np.ones((1,1)), verbose=0) for i in range(times)])
         seed = np.concatenate(seed_list, axis=1)
         return seed, np.mean(loss)
 

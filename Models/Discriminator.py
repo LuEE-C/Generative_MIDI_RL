@@ -1,10 +1,11 @@
 from keras.layers import Input, Dense
 from keras.models import Model
 from keras.optimizers import Adam
-import tensorflow as tf
 import keras.backend as K
-from Models.Stacked_RNN import stacked_rnn
+from Models.Stacked_RNN import stacked_rnn, stacked_rnn_clipped, WeightClip
 
+def wasserstein_loss(y_true, y_pred):
+    return K.mean(y_true * y_pred)
 
 class DiscriminatorNetwork(object):
     def __init__(self, cutoff, action_size, tau, lr):
@@ -27,12 +28,13 @@ class DiscriminatorNetwork(object):
     def create_discriminator_network(self):
         state_input = Input(shape=(self.cutoff, self.action_size))
 
-        main_network = stacked_rnn(state_input, 125)
+        main_network = stacked_rnn_clipped(state_input, 125)
 
-        outputs = Dense(1, activation='sigmoid')(main_network)
+        # outputs = Dense(1, activation='sigmoid')(main_network)
+        outputs = Dense(1, W_constraint = WeightClip(0.01))(main_network)
 
         discriminator = Model(inputs=[state_input], outputs=outputs)
-        discriminator.compile(optimizer=Adam(lr=self.lr), loss='binary_crossentropy')
+        discriminator.compile(optimizer=Adam(lr=self.lr), loss=wasserstein_loss)
         discriminator.summary()
 
         return discriminator
