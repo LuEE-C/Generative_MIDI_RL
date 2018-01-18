@@ -48,7 +48,7 @@ def make_midi_file(midi, file_name):
     mid.tracks.append(track)
     for i in range(midi.shape[1]):
         track.append(mido.Message('note_on', note=midi[0, i, 0], velocity=midi[0, i, 1], time=midi[0, i, 2]))
-    mid.save('../' + file_name)
+    mid.save('../GeneratedSamples/' + file_name)
 
 
 def print_midi_file(directory='../', name='43.mid'):
@@ -62,4 +62,5 @@ def print_midi_file(directory='../', name='43.mid'):
 
 
 if __name__ == '__main__':
+
     print_midi_file(name='59.mid')

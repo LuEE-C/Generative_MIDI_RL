@@ -1,16 +1,14 @@
-from keras.layers import Input, Dense, LeakyReLU, CuDNNGRU, Conv1D, Flatten, MaxPooling1D
+from keras.layers import Input, Dense
 from keras.models import Model
 import numpy as np
 import tensorflow as tf
 import keras.backend as K
-from NoisyDense import NoisyDense
-from Stacked_RNN import stacked_rnn
+from Models.Stacked_RNN import stacked_rnn
 
 
 class ActorNetwork(object):
-    def __init__(self, sess, cutoff, action_size, batch_size, tau, lr):
+    def __init__(self, sess, cutoff, action_size, tau, lr):
         self.sess = sess
-        self.batch_size = batch_size
         self.tau = tau
         self.lr = lr
         self.cutoff = cutoff

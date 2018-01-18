@@ -1,14 +1,13 @@
-from keras.layers import Input, Dense, LeakyReLU, CuDNNGRU, Concatenate, Conv1D, MaxPooling1D, Flatten
+from keras.layers import Input, Dense, LeakyReLU, Concatenate
 from keras.models import Model
 from keras.optimizers import Adam
 import keras.backend as K
 import tensorflow as tf
-from Stacked_RNN import stacked_rnn
+from Models.Stacked_RNN import stacked_rnn
 
 class CriticNetwork(object):
-    def __init__(self, sess, cutoff, action_size, batch_size, tau, lr):
+    def __init__(self, sess, cutoff, action_size, tau, lr):
         self.sess = sess
-        self.batch_size = batch_size
         self.tau = tau
         self.lr = lr
         self.action_size = action_size
@@ -47,10 +46,8 @@ class CriticNetwork(object):
         concat_network = Dense(256)(concat_network)
         concat_network = LeakyReLU()(concat_network)
 
-        # value_prediction = Dense(51, activation='softmax')(concat_network)
         value_prediction = Dense(1)(concat_network)
         critic = Model(inputs=[state_input, action_input], outputs=value_prediction)
-        # critic.compile(optimizer=Adam(lr=self.lr), loss='categorical_crossentropy')
         critic.compile(optimizer=Adam(lr=self.lr), loss='mse')
         critic.summary()
 
