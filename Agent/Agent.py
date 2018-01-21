@@ -61,9 +61,9 @@ class Agent:
         e, total_frames = 0, 0
         while e <= epoch:
 
-            discrim_loss = 0
-            while discrim_loss >= self.discriminator_loss_limit:
-                discrim_loss = self.train_discriminator()
+            # discrim_loss = 0
+            # while discrim_loss >= self.discriminator_loss_limit:
+            #     discrim_loss = self.train_discriminator()
 
             while self.memory.tree.size < self.min_history:
                 self.add_data_to_memory()
@@ -98,7 +98,7 @@ class Agent:
                     self.discriminator.model.save('saved_models/discriminator_' + str(e))
                     e += 1
 
-    @nb.jit
+    # @nb.jit
     def train_discriminator(self, evaluate=False):
         fake_batch = self.get_fake_batch()
         real_batch, done = self.environnement.query_state(self.batch_size)
@@ -112,7 +112,7 @@ class Agent:
         self.discriminator_training_batch += 1
         for l in self.discriminator.model.layers:
             weights = l.get_weights()
-            weights = [np.clip(w, -0.05, 0.05) for w in weights]
+            weights = [np.clip(w, -0.1, 0.1) for w in weights]
             l.set_weights(weights)
 
         return self.discriminator.model.train_on_batch([batch], [self.labels])
@@ -151,7 +151,7 @@ class Agent:
     def calc_rewards(self, states, states_primes):
         rewards = np.zeros((self.batch_size, 1))
         for i in range(self.batch_size):
-            val = self.discriminator.target_model.evaluate(states[i:i + 1], -np.ones((1, 1)), verbose=0)
+            val = self.discriminator.target_model.evaluate(states[i:i + 1], np.ones((1, 1)), verbose=0)
             if val < 0:
                 val = min(-log(abs(val)), 0)
             else:
@@ -176,7 +176,7 @@ class Agent:
         seed_list = [self.get_seed()]
         for _ in range(times):
             seed_list.append(self.get_seed(seed_list[-1]))
-        loss = np.mean([self.discriminator.target_model.evaluate(seed_list[i], -np.ones((1,1)), verbose=0) for i in range(times)])
+        loss = np.mean([self.discriminator.target_model.evaluate(seed_list[i], np.ones((1,1)), verbose=0) for i in range(times)])
         seed = np.concatenate(seed_list, axis=1)
         return seed, np.mean(loss)
 
@@ -208,5 +208,5 @@ class Agent:
 
 
 if __name__ == '__main__':
-    agent = Agent(cutoff=30, discriminator_loss_limits=0.25, batch_size=128)
+    agent = Agent(cutoff=30, batch_size=128)
     agent.train(epoch=5000)
