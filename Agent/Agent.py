@@ -48,7 +48,7 @@ class Agent:
         self.actor = ActorNetwork(self.sess, self.cutoff, 3, self.tau, self.lr)
         self.critic = CriticNetwork(self.sess, self.cutoff, 3, self.tau, self.lr)
 
-        self.discriminator = DiscriminatorNetwork(self.cutoff, 3, self.tau, self.lr)
+        self.discriminator = DiscriminatorNetwork(self.cutoff, 3, self.tau, self.lr, self.batch_size)
         self.discriminator_training_batch, self.discriminator_total_batch = 0, 0
 
         self.memory = Experience(memory_size=1000000, batch_size=self.batch_size, alpha=0.5)
@@ -61,10 +61,6 @@ class Agent:
         e, total_frames = 0, 0
         while e <= epoch:
 
-            # discrim_loss = 0
-            # while discrim_loss >= self.discriminator_loss_limit:
-            #     discrim_loss = self.train_discriminator()
-
             while self.memory.tree.size < self.min_history:
                 self.add_data_to_memory()
 
@@ -74,11 +70,7 @@ class Agent:
 
                     self.add_data_to_memory()
 
-                    # if discrim_loss >= self.discriminator_loss_limit:
-                    discrim_loss = self.train_discriminator()
-                    # else:
-                    #     discrim_loss = self.train_discriminator(evaluate=True)
-                    self.discriminator.target_train()
+                self.train_discriminator()
                 self.train_on_replay()
 
                 total_frames += 1
@@ -86,10 +78,9 @@ class Agent:
                 if total_frames % 2000 == 0:
                     print('Epoch :', e,
                           '\tDataset Epoch :', self.dataset_epoch,
-                          '\tDiscriminator training batch ratio :',
-                          '%.2f' % (self.discriminator_training_batch/self.discriminator_total_batch * 100.0), '%',
+                          end='\t'
                           )
-                    self.discriminator_total_batch, self.discriminator_training_batch = 0, 0
+                    # self.discriminator_total_batch, self.discriminator_training_batch = 0, 0
                     eval_seed, eval_loss = self.make_big_seed(3)
                     print('Eval loss :', '%.4f' % eval_loss, end='\t')
                     self.environnement.make_midi(eval_seed, str(e) + '.mid')
@@ -106,13 +97,13 @@ class Agent:
             self.dataset_epoch += 1
         batch = np.vstack((real_batch, fake_batch))
         if evaluate is True:
-            self.discriminator_total_batch += 1
+            # self.discriminator_total_batch += 1
             return self.discriminator.model.evaluate([batch], [self.labels], verbose=0)
-        self.discriminator_total_batch += 1
-        self.discriminator_training_batch += 1
+        # self.discriminator_total_batch += 1
+        # self.discriminator_training_batch += 1
         for l in self.discriminator.model.layers:
             weights = l.get_weights()
-            weights = [np.clip(w, -0.1, 0.1) for w in weights]
+            weights = [np.clip(w, -1, 1) for w in weights]
             l.set_weights(weights)
 
         return self.discriminator.model.train_on_batch([batch], [self.labels])
@@ -151,7 +142,8 @@ class Agent:
     def calc_rewards(self, states, states_primes):
         rewards = np.zeros((self.batch_size, 1))
         for i in range(self.batch_size):
-            val = self.discriminator.target_model.evaluate(states[i:i + 1], np.ones((1, 1)), verbose=0)
+            # val = self.discriminator.target_model.evaluate(states[i:i + 1], np.ones((1, 1)), verbose=0)
+            val = self.discriminator.model.evaluate(states[i:i + 1], np.ones((1, 1)), verbose=0)
             if val < 0:
                 val = min(-log(abs(val)), 0)
             else:
@@ -176,7 +168,10 @@ class Agent:
         seed_list = [self.get_seed()]
         for _ in range(times):
             seed_list.append(self.get_seed(seed_list[-1]))
-        loss = np.mean([self.discriminator.target_model.evaluate(seed_list[i], np.ones((1,1)), verbose=0) for i in range(times)])
+        # loss = np.mean([self.discriminator.target_model.evaluate(seed_list[i], np.ones((1, 1)), verbose=0) for i in
+        #                     range(times)])
+        loss = np.mean([self.discriminator.model.evaluate(seed_list[i], np.ones((1, 1)), verbose=0) for i in
+                            range(times)])
         seed = np.concatenate(seed_list, axis=1)
         return seed, np.mean(loss)
 

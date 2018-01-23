@@ -42,10 +42,9 @@ class ActorNetwork(object):
     def create_actor_network(self):
         state_input = Input(shape=(self.cutoff, 3))
 
-        main_network = stacked_rnn(state_input, 250)
+        main_network = stacked_rnn(state_input, 175)
 
         outputs = Dense(3, activation='tanh')(main_network)
-        # outputs = NoisyDense(3, activation='tanh', sigma_init=1, name='out_actions')(main_network)
 
         actor = Model(inputs=[state_input], outputs=outputs)
         actor.summary()
