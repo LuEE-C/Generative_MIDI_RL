@@ -18,18 +18,17 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 class Agent:
-    def __init__(self, cutoff=15, from_save=False, gamma=.99, batch_size=64, min_history=64000, lr=10e-4,
-                 discriminator_loss_limits=0.2, n_steps=5, tau=0.001):
+    def __init__(self, cutoff=15, from_save=False, gamma=.99, batch_size=64, min_history=64000, lr=10e-4, tau=0.001):
 
         self.cutoff = cutoff
         self.environnement = Environnement(cutoff=cutoff)
 
         self.batch_size = batch_size
 
-        self.n_steps = n_steps
+        self.positive_y = np.ones((self.batch_size, 1), dtype=np.float32)
+        self.negative_y = -np.ones((self.batch_size, 1), dtype=np.float32)
+        self.dummy_y = np.zeros((self.batch_size, 1), dtype=np.float32)
 
-        # self.labels = np.array([1] * self.batch_size + [0] * self.batch_size)
-        self.labels = np.array([-1] * self.batch_size + [1] * self.batch_size)
         self.gamma = gamma
 
         self.tau = tau
@@ -43,8 +42,6 @@ class Agent:
         K.set_learning_phase(1)
         K.set_session(self.sess)
 
-        self.discriminator_loss_limit = discriminator_loss_limits
-
         self.actor = ActorNetwork(self.sess, self.cutoff, 3, self.tau, self.lr)
         self.critic = CriticNetwork(self.sess, self.cutoff, 3, self.tau, self.lr)
 
@@ -52,7 +49,6 @@ class Agent:
         self.discriminator_training_batch, self.discriminator_total_batch = 0, 0
 
         self.memory = Experience(memory_size=1000000, batch_size=self.batch_size, alpha=0.5)
-
         self.dataset_epoch = 0
 
     # Main loop
@@ -67,15 +63,13 @@ class Agent:
             while True:
 
                 if total_frames % 4 == 0:
-
                     self.add_data_to_memory()
+                    self.train_discriminator()
 
-                self.train_discriminator()
                 self.train_on_replay()
-
                 total_frames += 1
 
-                if total_frames % 2000 == 0:
+                if total_frames % 1000 == 0:
                     print('Epoch :', e,
                           '\tDataset Epoch :', self.dataset_epoch,
                           end='\t'
@@ -86,27 +80,15 @@ class Agent:
                     self.environnement.make_midi(eval_seed, str(e) + '.mid')
                     self.actor.model.save('saved_models/actor_' + str(e))
                     self.critic.model.save('saved_models/critic_' + str(e))
-                    self.discriminator.model.save('saved_models/discriminator_' + str(e))
+                    self.discriminator.training_model.save('saved_models/discriminator_' + str(e))
                     e += 1
 
-    # @nb.jit
-    def train_discriminator(self, evaluate=False):
+    def train_discriminator(self):
         fake_batch = self.get_fake_batch()
         real_batch, done = self.environnement.query_state(self.batch_size)
         if done is True:
             self.dataset_epoch += 1
-        batch = np.vstack((real_batch, fake_batch))
-        if evaluate is True:
-            # self.discriminator_total_batch += 1
-            return self.discriminator.model.evaluate([batch], [self.labels], verbose=0)
-        # self.discriminator_total_batch += 1
-        # self.discriminator_training_batch += 1
-        for l in self.discriminator.model.layers:
-            weights = l.get_weights()
-            weights = [np.clip(w, -1, 1) for w in weights]
-            l.set_weights(weights)
-
-        return self.discriminator.model.train_on_batch([batch], [self.labels])
+        self.discriminator.training_model.train_on_batch([real_batch, fake_batch], [self.negative_y, self.positive_y, self.dummy_y])
 
     def get_fake_batch(self):
         seed = self.get_seed()
@@ -142,8 +124,7 @@ class Agent:
     def calc_rewards(self, states, states_primes):
         rewards = np.zeros((self.batch_size, 1))
         for i in range(self.batch_size):
-            # val = self.discriminator.target_model.evaluate(states[i:i + 1], np.ones((1, 1)), verbose=0)
-            val = self.discriminator.model.evaluate(states[i:i + 1], np.ones((1, 1)), verbose=0)
+            val = self.discriminator.model.predict(states[i:i + 1])[0,0]
             if val < 0:
                 val = min(-log(abs(val)), 0)
             else:
@@ -168,9 +149,7 @@ class Agent:
         seed_list = [self.get_seed()]
         for _ in range(times):
             seed_list.append(self.get_seed(seed_list[-1]))
-        # loss = np.mean([self.discriminator.target_model.evaluate(seed_list[i], np.ones((1, 1)), verbose=0) for i in
-        #                     range(times)])
-        loss = np.mean([self.discriminator.model.evaluate(seed_list[i], np.ones((1, 1)), verbose=0) for i in
+        loss = np.mean([self.discriminator.model.evaluate(seed_list[i], -np.ones((1, 1)), verbose=0) for i in
                             range(times)])
         seed = np.concatenate(seed_list, axis=1)
         return seed, np.mean(loss)
@@ -203,5 +182,5 @@ class Agent:
 
 
 if __name__ == '__main__':
-    agent = Agent(cutoff=30, batch_size=128)
+    agent = Agent(cutoff=10, batch_size=128)
     agent.train(epoch=5000)
