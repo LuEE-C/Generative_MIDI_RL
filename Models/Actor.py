@@ -42,7 +42,7 @@ class ActorNetwork(object):
     def create_actor_network(self):
         state_input = Input(shape=(self.cutoff, 3))
 
-        main_network = stacked_rnn(state_input, 175)
+        main_network = stacked_rnn(state_input, 125)
 
         outputs = Dense(3, activation='tanh')(main_network)
 

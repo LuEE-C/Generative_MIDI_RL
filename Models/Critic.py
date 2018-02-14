@@ -38,7 +38,7 @@ class CriticNetwork(object):
         state_input = Input(shape=(self.cutoff, self.action_size))
         action_input = Input(shape=(self.action_size,))
 
-        main_network = stacked_rnn(state_input, 175)
+        main_network = stacked_rnn(state_input, 125)
 
         concat_network = Concatenate()([main_network, action_input])
         concat_network = Dense(256)(concat_network)
